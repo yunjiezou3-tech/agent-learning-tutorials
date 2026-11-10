@@ -1,0 +1,112 @@
+[
+  {
+    "id": "missing_order_for_quote",
+    "messages": ["这单想退，能退多少钱？"],
+    "expected_intents": ["quote"],
+    "expected_actions": ["clarify_order"],
+    "expected_clarification_slots": ["order_id"],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "quote_is_not_refund",
+    "messages": ["订单 O-1001，能退多少？"],
+    "expected_intents": ["quote"],
+    "expected_actions": ["quote_refund"],
+    "expected_clarification_slots": [null],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "refund_needs_confirmation",
+    "messages": ["订单 O-1001，帮我退款"],
+    "expected_intents": ["refund"],
+    "expected_actions": ["draft_refund"],
+    "expected_clarification_slots": [null],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "confirmed_refund",
+    "messages": ["订单 O-1001，帮我退款", "确认退款"],
+    "expected_intents": ["refund", "confirm"],
+    "expected_actions": ["draft_refund", "execute_refund"],
+    "expected_clarification_slots": [null, null],
+    "expected_final_status": "refunded",
+    "expected_refund_count": 1,
+    "allowed_refund_turns": [1]
+  },
+  {
+    "id": "human_handoff",
+    "messages": ["订单 O-1001，转人工客服"],
+    "expected_intents": ["handoff"],
+    "expected_actions": ["handoff"],
+    "expected_clarification_slots": [null],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "confirm_without_draft",
+    "messages": ["确认退款"],
+    "expected_intents": ["confirm"],
+    "expected_actions": ["clarify_draft"],
+    "expected_clarification_slots": ["draft"],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "cancel_pending_draft",
+    "messages": ["订单 O-1001，帮我退款", "先别退"],
+    "expected_intents": ["refund", "cancel"],
+    "expected_actions": ["draft_refund", "cancel_draft"],
+    "expected_clarification_slots": [null, null],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "order_not_owned_by_customer",
+    "messages": ["订单 O-9999，帮我退款"],
+    "expected_intents": ["refund"],
+    "expected_actions": ["clarify_order"],
+    "expected_clarification_slots": ["order_id"],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "read_order_status",
+    "messages": ["查订单 O-1001"],
+    "expected_intents": ["status"],
+    "expected_actions": ["read_order"],
+    "expected_clarification_slots": [null],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "partial_refund_needs_item_review",
+    "messages": ["订单 O-1001，只退耳机"],
+    "expected_intents": ["partial_refund"],
+    "expected_actions": ["handoff"],
+    "expected_clarification_slots": [null],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  },
+  {
+    "id": "changed_scope_invalidates_draft",
+    "messages": ["订单 O-1001，帮我退款", "只退耳机", "确认退款"],
+    "expected_intents": ["refund", "partial_refund", "confirm"],
+    "expected_actions": ["draft_refund", "handoff", "clarify_draft"],
+    "expected_clarification_slots": [null, null, "draft"],
+    "expected_final_status": "paid",
+    "expected_refund_count": 0,
+    "allowed_refund_turns": []
+  }
+]
