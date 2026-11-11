@@ -501,6 +501,59 @@ keyword_results = self.vector_store.keyword_search(
 
 **检索词由谁给？**平时是用户或宿主 Agent 调用 `mem recall "<query>"` 时给出；CLI 原样传给 `Recall`。写入前的旧记忆对照则将本批消息连接并截取前 `reconcile_query_chars` 个字符，作为查询。读取路径**不调用 LLM 来生成关键词**。[CLI 入口](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/cli/src/agent_memory/cli/main.py#L451-L457) · [对照查询](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/reconcile.py#L97-L117)。
 
+#### 为什么本批消息的前一段也能查旧记忆？
+
+这里的“查询”不是必须由模型提炼出的几个关键词。`Recall.recall(query)` 接受一整段字符串；写入前的 `reconcile.build()` 直接把本批消息拼成文本，并以 `reconcile_query_chars` 截断，默认上限为 2,000 字符：
+
+```python
+text = " ".join(message.text for message in messages)[: config.write.reconcile_query_chars]
+hits = (
+    Recall(store).recall(text, limit=config.write.reconcile_entries, log=False) if text else []
+)
+```
+
+来源：[reconcile.py](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/reconcile.py#L97-L105) · [默认上限](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/config.py#L143-L154)。
+
+这段长字符串不会被当作一句必须完整匹配的话。检索器先分词、去掉重复词，再把词以 **OR** 连接；FTS5 在记忆摘要、正文片段和标题的索引中寻找命中，用 BM25 对候选排序。关键原始代码：
+
+```python
+def to_match_query(query: str, tokenizer: str = TOKENIZER_ASCII) -> str:
+    tokens = query_tokens(query, tokenizer)
+    return " OR ".join(f'"{token}"' for token in dict.fromkeys(tokens))
+```
+
+```python
+statement = (
+    f"SELECT name, kind, anchor, heading, bm25({surface}) AS rank FROM {surface} "
+    f"WHERE {surface} MATCH ? ORDER BY rank LIMIT ?"
+)
+```
+
+来源：[生成查询表达式](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/search_index.py#L30-L32) · [FTS5 匹配](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/search_index.py#L99-L139)。例如新消息提到 `ticket T-1001` 和 `SMS updates`，而旧记忆的摘要也含这些词，整段消息虽长，仍能因共享词项命中旧记忆。随后 BM25 排序，前几个结果作为旧记忆句柄放进 reconcile sheet，供模型判断是新增、改写还是取代旧事实。
+
+`reconcile.build()` 还会把 `profile` 类型记忆的摘要单独列入 sheet 的“Who this is about”作为背景；这不等于其完整记录已经进入可更新的命中句柄列表。原始代码：
+
+```python
+profile = tuple(record.abstract for record in store.records() if record.type == TYPE_PROFILE)
+```
+
+来源：[reconcile.py](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/reconcile.py#L97-L117)。
+
+**这是一种召回启发式，不保证查对。**前 2,000 字符可能没有晚些才出现的偏好；OR 查询可能被无关词冲淡；默认 `ascii` 分词不会抽出中文词。自动批次文本中的 `user:`、`assistant:` 等英文角色前缀即便被抽出，也不能代表中文语义，可能带来噪声。初次检索没找到时，蒸馏模型可调用 Write toolkit 的 `recall` 工具，以更集中的词再检索；新命中的句柄会加入 sheet：
+
+```python
+hits = Recall(self.store).recall(
+    query.strip(), limit=count or self.store.config.write.reconcile_entries, log=False
+)
+found = tuple(
+    reconcile.Handle(hit.name, hit.type, hit.status, hit.updated, hit.abstract)
+    for hit in hits
+)
+self._extend(found)
+```
+
+来源：[toolkit.py 的补充检索](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/toolkit.py#L144-L159) · [句柄扩展](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/toolkit.py#L208-L213)。若模型没有意识到需要补查，或相关记忆始终未进入候选，仍可能误写重复或冲突的记忆。中文会话尤其应启用 `cjk` 分词，并用真实改写问题测试召回率。
+
 默认 `ascii` 分词用正则抽取拉丁字母、数字、下划线；`cjk` 模式另外用 jieba 加入至少两个字的中文词。重复查询词会去掉，再以 `OR` 连接。原始代码：
 
 ```python
