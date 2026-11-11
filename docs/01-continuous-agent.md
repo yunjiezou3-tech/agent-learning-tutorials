@@ -514,6 +514,59 @@ hits = (
 
 来源：[reconcile.py](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/reconcile.py#L97-L105) · [默认上限](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/config.py#L143-L154)。
 
+**“前一段”具体指什么？**它不是“整个会话的前 2,000 字符”。蒸馏器先把待处理的连续增量消息按长度分成若干批（默认每批最多约 24,000 字符；单条超长消息会独占一批），每批各调用一次 `reconcile.build()`；然后才从**该批消息按时间顺序拼接后的文本**中截取开头 2,000 字符。截断是固定长度预算，没有判断哪些句子最重要，也可能切在一句话中间。原始代码：
+
+```python
+for batch in batching.batches(messages, config.max_distill_input_chars):
+    sheet = reconcile.build(store, session, batch)
+```
+
+```python
+def batches(messages: list[Message], max_chars: int) -> list[list[Message]]:
+    """Consecutive messages packed up to a size; a single oversized message stands alone."""
+    found: list[list[Message]] = []
+    current: list[Message] = []
+    size = 0
+    for message in messages:
+        length = len(message.text)
+        if current and size + length > max_chars:
+            found.append(current)
+            current = []
+            size = 0
+        current.append(message)
+        size += length
+    if current:
+        found.append(current)
+    return found
+```
+
+来源：[蒸馏按批调用](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/distill.py#L63-L70) · [分批代码](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/batching.py#L1-L22) · [默认长度配置](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/config.py#L143-L154)。
+
+**读者判断（原文）：**
+
+> 这个环节是否准确，依赖策略，比如一个会话结束-写入-去重-……，会话的前xx个字符中不一定包含旧记忆的线索，如果一轮消息调用一次后流程，就可以。
+
+这个判断抓住了**处理粒度影响初次召回**：如果一个长会话在结束时才集中蒸馏，一个批次可能混合多个话题，前 2,000 字符未必含有后面那条偏好的旧记忆线索；每轮及时捕获并完成蒸馏，通常能缩小批次、提高线索落在前缀中的概率。不过“一轮一次”仍不是充分条件：单轮消息也可能超过 2,000 字符，线索可能在末尾；异步写入任务也可能把连续边界积压后合并处理；中文默认分词和 OR 查询仍可能漏检或误召回。并且源码的实际顺序是**先查旧记忆作对照，再提出并校验写入操作**；引文中的“写入-去重”是策略示意，不是该仓库的调用顺序。若要提高覆盖率，可按消息或候选事实构造更集中的多个查询，并评测多话题、长消息与中文改写场景。
+
+排队中的同一会话写入任务还会合并到更新的消息水位，所以“每轮触发捕获”不自动等于“每轮独立蒸馏”。原始代码：
+
+```python
+open_job = next(
+    (job for job in jobs if job.session == session and job.state == STATE_QUEUED),
+    None,
+)
+if open_job is not None:
+    return self._store_job(
+        dataclasses.replace(
+            open_job,
+            target=max(open_job.target, target),
+            updated_at=timestamp.render(now),
+        )
+    )
+```
+
+来源：[write_jobs.py](https://github.com/tigerless-labs/agent-memory/blob/0bce2bb44e9e8dd4be420ca971f8c0a323e8871b/packages/core/src/agent_memory/core/write_jobs.py#L95-L115)。
+
 这段长字符串不会被当作一句必须完整匹配的话。检索器先分词、去掉重复词，再把词以 **OR** 连接；FTS5 在记忆摘要、正文片段和标题的索引中寻找命中，用 BM25 对候选排序。关键原始代码：
 
 ```python
