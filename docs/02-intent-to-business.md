@@ -19,7 +19,26 @@
 | 用户明确确认 | 用经过校验的参数提交退款 | 模拟订单由 `paid` 变成 `refunded` |
 | 工具返回后 | 再查订单状态，给出可追踪的处理结果 | 确认状态确实为 `refunded` |
 
-这种设计的收益不只是“分类更准”。它把语言判断、业务规则和外部状态连接起来，让系统可以解释**为什么追问、为什么执行、执行是否生效**。云产品交易也存在同样问题：火山引擎的 [volcengine-sale Skill](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/specialized/service-support/volcengine-sale/SKILL.md) 明确将询价、购买、退订分流；同时命中询价和购买时先报价，用户确认后才进入购买。
+这种设计的收益不只是“分类更准”。它把语言判断、业务规则和外部状态连接起来，让系统可以解释**为什么追问、为什么执行、执行是否生效**。火山引擎公开的交易 Skill 提供了一个具体拆法。
+
+### 从交易 Skill 的截图拆出四层职责
+
+![volcengine-sale 的意图路由表和三条流程文件目录](assets/volcengine-sale-routing-2026-11-12.png)
+
+*截图：2026 年 11 月 12 日的 [volcengine-sale/SKILL.md](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/specialized/service-support/volcengine-sale/SKILL.md)。图中可见总入口将诉求路由到 `price`（询价）、`buy`（购买）、`unsubscribe`（退订），再指向各自的流程文件；未命中时返回上层 Agent。同时命中询价和购买时先询价，用户确认价格后再询问是否购买。*
+
+> **我的产品启发：**做业务 AI 产品时，可以把“判断用户要做什么”和“这件事该怎样做”拆开。Skill 负责描述路由、所需参数和操作步骤；真正调用业务系统、确认是否完成，还要靠工程提供的工具与状态查询。
+
+| 层 | 应写清的责任 | 火山引擎例子与本章对应 |
+|---|---|---|
+| **意图路由** | 定义支持哪些动作、如何处理多意图和范围外诉求；输出下一条流程，不直接提交交易。 | 截图中的三类路由；本章 `RuleRecognizer` 输出 `quote`、`refund` 等意图。 |
+| **流程说明** | 为每个动作列出必需参数、缺失时的追问、执行前确认、异常和降级路径。 | 分开的[询价](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/specialized/service-support/volcengine-sale/references/price/README.md)、[购买](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/specialized/service-support/volcengine-sale/references/buy/README.md)、[退订](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/specialized/service-support/volcengine-sale/references/unsubscribe/README.md)流程；本章 `CommerceAgent.handle()` 和 `_confirm()` 守住退款草稿与确认边界。 |
+| **工具执行** | 用已授权的接口传递经过校验的参数并记录结果；写操作还需约定幂等标识。 | 实际云操作由 [`ve` CLI](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/core/volcengine-cli/SKILL.md) 在账号登录和权限约束下调用 API；本章由 `LabStore.execute_refund()` 模拟。安装一份 Skill 文本本身不会获得云账号权限。 |
+| **完成判断** | 事先定义可观察的完成证据：读操作核验接口返回，写操作执行后回查业务状态；状态不明时停在“待核查”。 | 询价金额取接口返回值；走 `CommonBuy` 的购买分支查到实例为 `Running` 才报开通成功；退订流程再次查询实例状态。本章重新读取订单，确认 `status=refunded`，不凭 Agent 的一句“已退款”判定成功。 |
+
+截图直接展示的是**意图路由和流程文件的分层**；表中具体的调用与完成条件来自各动作流程及 CLI 文档。这样拆分后，产品可以独立修改路由与流程，工程可以独立替换工具，但“是否完成”的判断仍要落在真实业务状态上。
+
+写业务 Skill 时，每条流程至少应约定：**读取或改变哪个业务对象、什么返回值或状态可作为完成证据**；对购买、退款、退订这类写操作，还要写明目标状态、回查接口、超时待核查条件和幂等标识。它们是产品与工程共同验收的条件，不能只写成“成功后告知用户”。
 
 ## 2.2 从一句话到动作的六个关口
 
@@ -191,7 +210,7 @@ def next_step(
 
 ## 参考项目与证据边界
 
-- [火山引擎 volcengine-sale](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/specialized/service-support/volcengine-sale/SKILL.md)：公开的交易意图路由规则；本章的退款流程是教学改写，不是该 Skill 的实现。
+- [火山引擎 volcengine-sale](https://github.com/volcengine/volcengine-agent-toolkit/blob/main/skills/specialized/service-support/volcengine-sale/SKILL.md)：公开的交易意图路由及询价、购买、退订流程入口；本章的售后退款流程是教学改写，不是该 Skill 的实现。
 - [AskBench](https://github.com/jialeuuz/askbench)：何时澄清与澄清点覆盖；本章只借鉴其问题设计。
 - [EComAgentBench](https://github.com/Morizeyao/EComAgentBench_)：多来源隐藏购物意图与约束评分；公开任务使用合成画像。
 - [ShoppingComp](https://github.com/ByteDance-BandAI/ShoppingComp)：商品推荐的约束、依据与安全评分。
